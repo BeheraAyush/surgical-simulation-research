@@ -20,7 +20,7 @@ The long-term goal is to explore patient-specific surgical simulation through in
 
 ### Interactive Tissue Deformation
 
-![Deformation Comparison](./deformation-comparison.png)
+![tissue-deformation](./tissue-deformation.png)
 
 ## Current Milestones
 
