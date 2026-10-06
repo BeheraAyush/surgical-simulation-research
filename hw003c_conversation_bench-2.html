@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SANVI HW-003c conversation bench</title>
+<style>
+:root{--bg:#F4F5FA;--card:#fff;--ink:#1A1D2E;--mute:#666B88;--acc:#4B5BD6;--line:#DDE0EE;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root{--bg:#10121C;--card:#1A1D2E;--ink:#ECEEFA;--mute:#9A9FC0;--acc:#8793FF;--line:#2B3050}}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}main{max-width:660px;margin:0 auto;padding:14px}
+h1{font-size:1.2rem;margin:0}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-top:10px}
+select,input{width:100%;padding:7px;border:1px solid var(--line);background:var(--bg);color:var(--ink);margin-top:4px;font:inherit;border-radius:10px}
+button{font:inherit;border:0;border-radius:10px;padding:8px 12px;background:var(--acc);color:#fff;font-weight:600;margin:6px 6px 0 0}button:disabled{opacity:.5}
+pre{white-space:pre-wrap;word-break:break-word;font:12px/1.45 ui-monospace,monospace;margin:6px 0 0}.s{color:var(--mute);font-size:.82rem}label{display:block;margin-top:6px;font-size:.85rem}
+</style></head><body><main>
+<h1>SANVI HW-003c: conversation bench (rev 3)</h1>
+<div class="s">Separate from HW-003. Targets: Qwen3-0.6B-q4f16_1-MLC and Llama-3.2-1B-Instruct-q4f16_1-MLC. Do not substitute silently. Speed is not quality: the saved text is scored by a person, never by this page. To pin the WebLLM version, open this page with ?v=x.y.z after the version is confirmed.</div>
+<div class="card"><select id="sel"><option>Loading model list...</option></select>
+<button id="load" disabled>Load model</button><button id="m1" disabled>1 Quality</button><button id="m2" disabled>2 Instructions</button><button id="m3" disabled>3 Multi-turn</button><button id="m4" disabled>4 Context reuse</button><button id="all" disabled>Run 1-4</button><button id="stop" disabled>Stop</button><button id="unl" disabled>Unload</button><button id="cp">Copy report</button>
+<div class="s" id="prog" style="margin-top:6px"></div>
+<div class="s">Stop cannot interrupt loading. If progress freezes about 3 minutes, close the tab and record "load stalled". Do not retry a failed load more than once. A failed download is a network result, not a GPU or RAM result.</div></div>
+<div class="card"><b>Operator observations</b> (not measurements; unfilled = "not recorded")
+<label>Charging<select id="o1"><option>not recorded</option><option>yes</option><option>no</option></select></label>
+<label>Heating<select id="o2"><option>not recorded</option><option>none noticed</option><option>noticeable</option></select></label>
+<label>Freeze or reload<select id="o3"><option>not recorded</option><option>neither</option><option>freeze</option><option>reload</option></select></label>
+<label>Controls usable during generation<select id="o5"><option>not recorded</option><option>yes</option><option>no</option><option>partly</option></select></label>
+<label>Background apps<input id="o4" placeholder="e.g. Telegram, Clock"></label>
+<label>Notes<input id="o6"></label></div>
+<div class="card"><pre id="out"></pre></div>
+<script type="module">
+const $=id=>document.getElementById(id);let W,engine,list=[],rep=[],stopF=false,mid='',modMax=0,gens=[],loadedId='',modOk=0,modNC=0;
+const log=t=>{rep.push(t);$('out').textContent=rep.join('\n')};
+const f=(x,d=2)=>isFinite(x)?x.toFixed(d):'n/a';
+const U=c=>({role:'user',content:c}),AS=c=>({role:'assistant',content:c});
+const hb={last:performance.now(),max:0};setInterval(()=>{const n=performance.now();hb.max=Math.max(hb.max,n-hb.last);hb.last=n},50);
+const lock=b=>{['load','m1','m2','m3','m4','all','unl'].forEach(i=>$(i).disabled=b||(i!=='load'&&!engine));$('stop').disabled=!b||!engine};
+// Returns an explicit result. A failed reset is never swallowed.
+const reset=async()=>{try{await engine.resetChat();return{ok:true}}catch(e){return{ok:false,err:e.message}}};
+async function mustReset(tag){const r=await reset();if(!r.ok)throw new Error('resetChat() failed before '+tag+': '+r.err+'. Module aborted because later results would be contaminated.')}
+const isComplete=r=>r.st==='complete';
+const clean=t=>t.replace(/<think>[\s\S]*?<\/think>/gi,'').replace(/<think>[\s\S]*$/i,'').trim();
+window.addEventListener('unhandledrejection',e=>log('UNHANDLED: '+(e.reason&&e.reason.message||e.reason)));
+async function gen(id,msgs,mt=60,full=false){const mj=JSON.stringify(msgs),send=JSON.parse(mj),last=msgs[msgs.length-1].content;hb.max=0;hb.last=performance.now();
+const t0=performance.now();let tf=null,txt='',u=null,st='complete',er='',fr='';
+try{const s=await engine.chat.completions.create({messages:send,stream:true,stream_options:{include_usage:true},max_tokens:mt,temperature:0});
+for await(const c of s){const ch=c.choices[0];const d=ch&&ch.delta&&ch.delta.content;if(d){if(tf===null)tf=performance.now();txt+=d}if(c.usage)u=c.usage;if(ch&&ch.finish_reason){fr=ch.finish_reason;if(fr==='length')st='cut at max_tokens'}}}
+catch(e){st='ERROR';er=e.message}
+if(stopF&&st==='complete')st='stopped';
+const t1=performance.now(),x=(u&&u.extra)||{};
+const cf=[...Object.entries(u||{}),...Object.entries(x)].filter(([k])=>/cache|prefix|cached|reuse/i.test(k));
+const r={id,txt,ans:clean(txt),think:/<think>/i.test(txt),mj,err:er,pt:u&&u.prompt_tokens,ct:u&&u.completion_tokens,ttft:tf?(tf-t0)/1000:NaN,tot:(t1-t0)/1000,pf:x.prefill_tokens_per_s,dc:x.decode_tokens_per_s,gap:hb.max,st};
+modMax=Math.max(modMax,r.gap);gens.push({model:loadedId,mid,id,st});if(st==='complete')modOk++;else modNC++;
+log(`[${mid}/${id}] ${st}${er?' '+er:''} | finish_reason ${fr||'n/a'} | ${loadedId} | in ${r.pt} out ${r.ct} tok | first-content-chunk latency ${f(r.ttft)} s | total ${f(r.tot)} s | prefill ${f(r.pf,1)} / decode ${f(r.dc,1)} tok/s | think-tag ${r.think} | max main-thread gap ${Math.round(r.gap)} ms\n   usage keys [${u?Object.keys(u).join(','):'none'}] extra keys [${Object.keys(x).join(',')}] | cache fields: ${cf.length?cf.map(([k,v])=>k+'='+JSON.stringify(v)).join(', '):'none exposed'}`);
+if(st!=='complete')log('   STATUS FLAG: '+(st==='cut at max_tokens'?'INCOMPLETE (truncated at max_tokens)':st)+(er?' | error: '+er:'')+' | NOT EVALUATED. Raw output and all metrics are preserved; not counted as a pass, a fail or a successful quality result.');
+log('   '+(full?'MESSAGES: '+r.mj:'PROMPT: '+JSON.stringify(last)));log('   OUTPUT (exact, unedited): '+JSON.stringify(txt));return r}
+async function mod(name,fn){if(!engine)return;mid=name;stopF=false;modMax=0;modOk=0;modNC=0;lock(true);log('\n===== MODULE '+name+' =====');
+try{await fn()}catch(e){log('MODULE ERROR (module aborted): '+e.message)}log(`MODULE ${name} max main-thread gap: ${Math.round(modMax)} ms (gap over about 100 ms means the page was blocked)`);log(`MODULE ${name} generation status: ${modOk} complete, ${modNC} not complete (NOT EVALUATED, excluded from conclusions)`);lock(false)}
+const QUIZ=[['Q1','What is the capital city of France? Answer in one word.',/paris/i],['Q2','What is 17 plus 25? Reply with only the number.',/\b42\b/],['Q3','Which organelle is called the powerhouse of the cell?',/mitochond/i],['Q4','Name the process by which plants make food using sunlight.',/photosynth/i],['Q5','Ravi is taller than Sam. Sam is taller than Tara. Who is the shortest?',/tara/i]];
+const words=t=>t.trim().split(/\s+/).filter(Boolean).length;
+const FRUITS=['apple','banana','mango','orange','grape','pear','peach','plum','cherry','strawberry','watermelon','pineapple','kiwi','papaya','guava','lemon','lime','melon','apricot','blueberry','raspberry','pomegranate','coconut','fig','lychee','berry'];
+const fruitOf=s=>{const n=s.trim().toLowerCase().replace(/[\s.!,;:]+$/,'');return FRUITS.find(fr=>n===fr||n===fr+'s'||n===fr+'es')||null};
+const INS=[['I1','Reply in exactly one sentence of at most 12 words: why is the sky blue?',t=>{const s=t.trim();return s.length>0&&words(s)<=12&&(s.match(/[.!?]+/g)||[]).length===1&&/[.!?]\s*$/.test(s)},'non-empty, at most 12 words, exactly one sentence-ending mark at the end'],
+['I2','Answer in Hindi using Devanagari script: What is your name?',t=>/[ऀ-ॿ]/.test(t),'contains at least one Devanagari character; does not verify the Hindi is correct'],
+['I3','List exactly three fruits as a numbered list, nothing else.',t=>{const l=t.split('\n').map(x=>x.trim()).filter(Boolean);return l.length===3&&l.every((x,i)=>{const m=x.match(/^(\d+)[.)]\s*(.+)$/);return !!m&&+m[1]===i+1&&fruitOf(m[2])!==null})},'exactly three lines numbered 1-3; each item, after trimming and removing trailing punctuation, must equal exactly one fruit from the predefined list (singular, +s or +es); extra words, explanations, negations and multiple fruits fail; duplicate fruits are not rejected. List: '+FRUITS.join(', ')],
+['I4','Do two things: first write the word BLUE in capital letters, then write the number 7.',t=>{const i=t.indexOf('BLUE'),j=t.search(/7/);return i>=0&&j>=0&&i<j},'BLUE appears before the first 7'],
+['I5','What is the name of my dog? You have not been told.',t=>/(don'?t|do not|cannot|can'?t|not been told|no way|unknown|not sure|haven'?t|not provided)/i.test(t),'looks for an uncertainty or inability phrase; detecting such a phrase does NOT show that the model avoided inventing an answer',{lab:['uncertainty phrase detected','uncertainty phrase NOT detected'],hum:'decide whether the response (a) correctly acknowledges insufficient information, (b) avoids inventing a specific answer, and (c) does not contradict itself.'}]];
+const T=['My project is called SANVI. It is a personal AI assistant designed to work locally and support offline operation.',"What is my project's name, and what is its purpose?",'What is the main architectural goal of this project?'];
+const P='Read this passage. A small coastal town collects rainwater from its rooftops into a shared underground tank. In dry months the council limits each household to a fixed daily amount, and a volunteer group checks the tank level every Monday. Last year a leaking valve let the level drop lower than expected, and repairs took three weeks. Since then the council has added a second smaller tank and a sensor that alerts the volunteers when the level falls below a set mark. Question: In two sentences, what is the main idea?';
+const F='Now answer again in one short sentence.';
+const nev=r=>`   NOT EVALUATED: status ${r.st}${r.err?' | error: '+r.err:''}. Not counted as a pass or a fail. Raw output and metrics are preserved above.`;
+const runs={
+m1:()=>mod('1-Quality',async()=>{for(const[id,p,re]of QUIZ){if(stopF)break;await mustReset(id);const r=await gen(id,[U(p)]);
+if(!isComplete(r)){log(nev(r));continue}
+log(`   DIAGNOSTIC keyword indicator (not a score, not proof of correctness): ${re.test(r.ans)?'keyword present':'keyword absent'}. Human rubric scoring required.`)}}),
+m2:()=>mod('2-Instructions',async()=>{for(const[id,p,ck,desc,o]of INS){if(stopF)break;await mustReset(id);const r=await gen(id,[U(p)]);
+if(!isComplete(r)){log(nev(r));continue}
+const ok=ck(r.ans),w=o&&o.lab?o.lab[ok?0:1]:(ok?'pass':'fail');
+log(`   ${o?'DIAGNOSTIC HEURISTIC':'BASIC AUTOMATED CHECK'} [${desc}]: ${w}. Run on the answer with any think-block removed. Diagnostic only, not semantic verification; partial vs full compliance needs human review.`);
+if(o&&o.hum)log('   HUMAN REVIEW REQUIRED: '+o.hum)}}),
+m3:()=>mod('3-MultiTurn',async()=>{for(let k=1;k<=2;k++){if(stopF)break;log('--- conversation run '+k+' (full history sent each turn; assistant turns are the exact generated text; only complete generations are carried forward)');await mustReset('conversation run '+k);const h=[];const rs=[];
+for(let i=0;i<3&&!stopF;i++){h.push(U(T[i]));const r=await gen('T'+(i+1),h.slice(),80,true);rs.push(r);
+if(!isComplete(r)){log(`   CONVERSATION RUN ${k} INCOMPLETE: turn ${i+1} status ${r.st}${r.err?' | error: '+r.err:''}. NOT EVALUATED. This run is excluded from context-retention conclusions, later turns were not run, and the raw output is preserved above.`);break}
+h.push(AS(r.txt))}
+if(rs.length===3&&rs.every(isComplete))log('   DIAGNOSTIC keyword indicators only: turn 2 mentions SANVI: '+(/sanvi/i.test(rs[1].ans)?'yes':'no')+'; turn 3 mentions local/offline: '+(/(local|offline)/i.test(rs[2].ans)?'yes':'no')+'. Invented details and recall need human review.')}}),
+m4:()=>mod('4-ContextReuse',async()=>{
+log('FIXED EXECUTION ORDER per sequence: B1 -> B2 -> C2 -> A. Not counterbalanced; this is an exploratory comparison. Sequence 1 may include shader warm-up.');
+log('LABELS: B1 = first turn. B2 = continuing session, no reset. C2 = resetChat() followed by the identical full message history. A = independent short request (a different workload, not a control).');
+log('Complete KV-cache invalidation after resetChat(): UNVERIFIED. C2 is not guaranteed to be a cold-cache condition.');
+for(let k=1;k<=2;k++){if(stopF)break;log('--- sequence '+k);
+let r0=await reset();if(!r0.ok){log('SEQUENCE '+k+' INVALID: resetChat() failed before B1: '+r0.err+'. Test aborted.');return}
+const B1=await gen('B1 turn 1',[U(P)],48);if(!isComplete(B1)){log('SEQUENCE '+k+' NOT EVALUATED: B1 status '+B1.st+(B1.err?' | error: '+B1.err:'')+'. B1 output is not carried forward. Test aborted.');return}
+const h=[U(P),AS(B1.txt),U(F)];
+const B2=await gen('B2 continuing session, no reset',h,48,true);if(!isComplete(B2)){log('SEQUENCE '+k+' NOT EVALUATED: B2 status '+B2.st+(B2.err?' | error: '+B2.err:'')+'. B2/C2 comparison INVALID. Test aborted.');return}
+const r1=await reset();if(!r1.ok){log('B2/C2 COMPARISON INVALID: resetChat() failed before C2: '+r1.err+'. C2 and A not run; test aborted.');return}
+log('   resetChat() before C2 returned without error. This does not prove the KV cache was cleared.');
+const C2=await gen('C2 resetChat() then identical full history',h,48,true);if(!isComplete(C2)){log('SEQUENCE '+k+' C2 NOT EVALUATED: status '+C2.st+(C2.err?' | error: '+C2.err:'')+'. B2/C2 comparison INVALID. Test aborted.');return}
+log(`   B2/C2 messages array identical as sent: ${B2.mj===C2.mj ? 'yes':'NO, comparison INVALID'} | prompt tokens B2 ${B2.pt}, C2 ${C2.pt}: ${B2.pt===C2.pt?'equal':'DIFFER, not like-for-like'}`);
+const r2=await reset();if(!r2.ok){log('resetChat() failed before A: '+r2.err+'. A not run; test aborted.');return}
+const A=await gen('A independent short request (different workload)',[U(F)],48);
+if(!isComplete(A))log('   A NOT EVALUATED: status '+A.st+(A.err?' | error: '+A.err:'')+'. Excluded from the summary; raw output and metrics preserved above.');
+log(`SUMMARY seq ${k} first-content-chunk latency s: B1 ${f(B1.ttft)} | B2 ${f(B2.ttft)} | C2 ${f(C2.ttft)} | A ${isComplete(A)?f(A.ttft):'n/a (NOT EVALUATED)'}. A latency difference is NOT proof of cache reuse.`);
+for(const[n,r]of[['B2',B2],['C2',C2]])log(`INDIRECT ARITHMETIC ${n}: ${r.pt} prompt tokens / B1 prefill ${f(B1.pf,1)} tok/s = ${f(r.pt/B1.pf)} s implied by full prefill at B1's rate; measured first-content-chunk latency ${f(r.ttft)} s. Indirect evidence only. Direct reuse evidence exists only if a cache field was printed above.`)}
+log('REUSE STATUS: UNVERIFIED unless a cache field was printed above.')})};
+['m1','m2','m3','m4'].forEach(k=>$(k).onclick=runs[k]);
+$('all').onclick=async()=>{for(const k of['m1','m2','m3','m4']){await runs[k]();if(stopF)break}};
+$('stop').onclick=()=>{stopF=true;try{engine.interruptGenerate()}catch(e){}};
+$('unl').onclick=async()=>{lock(true);try{await engine.unload();engine=null;loadedId='';log('Model unloaded.')}catch(e){log('UNLOAD ERROR: '+e.message)}lock(false)};
+$('cp').onclick=async()=>{const o=`\n\nOPERATOR OBSERVATIONS (not measurements): charging ${$('o1').value} | heating ${$('o2').value} | freeze/reload ${$('o3').value} | controls usable ${$('o5').value} | background apps ${$('o4').value||'not recorded'} | notes ${$('o6').value||'none'}`;
+const tb=gens.length?'\n\nHUMAN REVIEW TABLE (to be filled in by a person; scores 0/1/2 or N/A, never by this page)\n'+gens.map(g=>g.st==='complete'?`${g.model} | ${g.mid}/${g.id} | FC __  REL __  COH __  COMP __  INS __ | notes:`:`${g.model} | ${g.mid}/${g.id} | NOT EVALUATED (status: ${g.st}) | notes:`).join('\n'):'';
+try{await navigator.clipboard.writeText(rep.join('\n')+tb+o);alert('Report copied')}catch(e){alert('Copy failed, select the text manually')}};
+$('load').onclick=async()=>{const m=list[+$('sel').value];lock(true);
+try{if(engine){await engine.unload();engine=null;loadedId=''}log('\nLOADING '+m.model_id+' (catalogue estimate '+Math.round(m.vram_required_MB)+' MB, not measured)');
+const t0=performance.now();engine=await W.CreateMLCEngine(m.model_id,{initProgressCallback:r=>{$('prog').textContent=r.text}});loadedId=m.model_id;log('Load time: '+f((performance.now()-t0)/1000,1)+' s (includes download if uncached)');
+const nm=new Set();for(let o=Object.getPrototypeOf(engine);o&&o!==Object.prototype;o=Object.getPrototypeOf(o))Object.getOwnPropertyNames(o).forEach(n=>nm.add(n));
+log('ENGINE API (filtered): '+[...nm].filter(n=>/cache|reset|stats|interrupt|unload|prefix|kv|chat|completion/i.test(n)).join(', '))}
+catch(e){engine=null;loadedId='';log('LOAD ERROR (exact): '+e.message)}$('prog').textContent='';lock(false)};
+(async()=>{log('SANVI HW-003c rev 3 | '+new Date().toLocaleString());log('UA: '+navigator.userAgent);
+log('METRIC NOTE: "first-content-chunk latency" is the time from request start to the first streamed chunk that contains text. It is not an exact first-token timestamp. HW-003 and HW-003b used the same measurement under the name "first token".');
+log('HUMAN EVALUATION RUBRIC (fixed before running): score each saved output 0 = fails, 1 = partly, 2 = fully, or N/A, on FC factual correctness, REL relevance, COH coherence, COMP completeness, INS instruction compliance. Keyword and automated checks below are diagnostic indicators only, never quality scores.');
+log('STATUS RULES: only generations that finish with status "complete" are evaluated. "cut at max_tokens" (truncated), "ERROR" and "stopped" are NOT EVALUATED: raw output and metrics are kept, but they are not validated, not counted as pass or fail, and never carried into multi-turn or context-reuse conclusions.');
+if(!navigator.gpu){log('ERROR: WebGPU unavailable');return}const ad=await navigator.gpu.requestAdapter();if(!ad){log('ERROR: no adapter');return}
+const f16=ad.features.has('shader-f16'),i=ad.info||{};log('Adapter: '+[i.vendor,i.architecture].filter(Boolean).join(' / ')+' | shader-f16 '+f16+' | maxStorageBinding '+(ad.limits.maxStorageBufferBindingSize/1048576|0)+' MB');
+const qv=new URLSearchParams(location.search).get('v'),pin=qv&&/^\d+\.\d+\.\d+$/.test(qv)?qv:'';if(qv&&!pin)log('Ignored invalid ?v= value (expected x.y.z).');
+const spec=pin?'@'+pin:'';
+try{W=await import('https://esm.run/@mlc-ai/web-llm'+spec)}catch(e){log('ERROR: WebLLM CDN load failed'+(pin?' (pinned '+pin+')':'')+': '+e.message);return}
+let rv='';try{const r=await fetch('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm'+spec+'/package.json');if(r.ok)rv=(await r.json()).version||''}catch(e){}
+if(pin)log(`WebLLM pinned via ?v=${pin}. package.json at that pin reports: ${rv||'could not read'}. Compatibility of this pin with the tablet is untested until a run completes.`);
+else log(`Exact WebLLM package version: UNVERIFIED (unpinned import). jsdelivr's current package.json reports ${rv||'(could not read)'} as latest. This is indirect evidence only: the browser may have loaded a different or cached build. Run date ${new Date().toISOString().slice(0,10)}. To pin, reopen this page with ?v=<confirmed version> and reuse the same value for later runs.`);
+list=W.prebuiltAppConfig.model_list.filter(m=>(m.model_type===undefined||m.model_type===0)&&m.vram_required_MB&&m.vram_required_MB<=2600&&(f16||!(m.required_features||[]).includes('shader-f16'))).sort((a,b)=>a.vram_required_MB-b.vram_required_MB);
+for(const t of['Qwen3-0.6B-q4f16_1-MLC','Llama-3.2-1B-Instruct-q4f16_1-MLC'])log('Target model '+t+': '+(list.some(m=>m.model_id===t)?'present in catalogue':'ABSENT from catalogue or filtered out'));
+$('sel').innerHTML=list.map((m,i)=>`<option value="${i}">${m.model_id} | ~${Math.round(m.vram_required_MB)} MB est.</option>`).join('');lock(false)})();
+</script></main></body></html>
